@@ -1,0 +1,196 @@
+---
+title: "HDVC Project"
+output: html_document
+date: "2025-11-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Exploratory Data Analysis
+
+## 1. Load packages and data
+
+```{r}
+# load libraries 
+library(tidyverse)
+library(janitor)
+library(scales)
+library(ggthemes)
+
+
+# Import dataset
+df_raw <- read.csv("colorectal_cancer_dataset.csv")
+
+# Clean column names
+df <- df_raw %>% clean_names()
+```
+
+We used `tidyverse` in order to obtain a a coherent grammar format for an easier data manipulation and plotting.
+
+`clean_names()` is used to standarize te column names and make them more readable like, for example Cancer_Stage -\> cancer_stage.
+
+We have kept df_raw (original dataset) and df (working version) separated for better practice.
+
+```{r}
+summary(df)
+```
+
+`tidyverse` offers a consistent environment for manipulation and graphics.
+
+`janitor` helps clean column names if necessary.
+
+`glimpse()` and `summary()` are used in order to see and understand the structure of the dataset.
+
+## 2. Data quality check
+
+```{r}
+# See the basic structure
+glimpse(df)
+
+# Summary statistics for the main variables
+df %>%
+  select(age, tumor_size_mm, healthcare_costs, incidence_rate_per_100k, mortality_rate_per_100k) %>% summary()
+
+# Check for missing values
+colSums(is.na(df))
+```
+
+The dataset contains 167,497 patients and 28 variables. All the fields of the dataset are complete, which means we have not detected any missing values (NA). There are numeric variables such as age, tumor size and the healthcare costs, and all of them fall within plausible ranges. This results support the internal consistency and suitability of the data for analysis.
+
+## 3. Variables selected for the project
+
+For this project we focus on variables that describe the patient demographics, disease characteristics and the healthcare context such as age, country, cancer stage, five-year survival, economic classification and healthcare costs.
+
+## 4. Univariate exploration
+
+### 4.1. Age distribution
+
+```{r}
+ggplot(df, aes(x= age)) +
+  geom_histogram(binwidth = 5, fill = "#80b1d3", color = "white") + geom_vline(xintercept = c(45,85), linetype = "dashed", color = "red") + labs(title = "Age distribution of CC patients", subtitle = "Red dashed lines indicate typical screening age range 45-75 years", x = "Age", y = "Number of patients") + theme_minimal()
+```
+The age distribution shows that most patients that have had screenings done to them are found in more abundance after the age of 45 years old. 
+This pattern is consistent with the known epidemiology of colorectal cancer that defines the following:
+
+- Under 45: Start screenings if the patient presents symptoms.
+
+- Ages 76-85: Screening are a optional but recommended.
+
+- 85+: Screenings are not recommended at this point.
+
+Reference: https://coloncancercoalition.org/screening/when-to-get-screened/ 
+
+### 4.2. Cancer stage distribution
+
+```{r}
+df %>% count(cancer_stage) %>% mutate(prop = n / sum(n) * 100)
+
+ggplot(df, aes(x = cancer_stage, fill = cancer_stage)) + geom_bar(color = "black") + scale_fill_manual(values = c("Localized" = "#8ECFC9",
+                               "Regional" = "#FFBE7A",
+                               "Metastatic" = "#FA7F6F")) + labs(title = "Distribution on CC stages", x = "Cancer Stage", y = "Number of patients") + theme_minimal()
+```
+Overall, the distribution of the cancer stages is approximately 40% localized, 40% regional and 20% metastatic. This shows that there's a noticeable burden of advanced diasease at diagnosis, even before stratifying by age or country.
+
+### 4.3. Healthcare access distribution
+
+```{r}
+df %>% count(healthcare_access) %>% mutate(prop = n/sum(n) *100)
+```
+The healthcare access is categorised into:
+-  ~ 30% of patients reporting high access to healthcare.
+- ~ 20% of patients reporting of low access to healthcare.
+- ~ 50% of patients reporting moderate to healthcare.
+
+### 4.4. Survival at 5 years (overall)
+
+```{r}
+df %>% count(survival_5_years) %>% mutate(prop= n/sum(n)*100)
+```
+Approximately 60% of the patients survived at least five years after the diagnosis. This will be further stratified by stage and healthcare access in order to better understand the way these factor affect the prognosis.
+
+## 5. Create derived variables 
+
+### 5.1. Age groups
+
+```{r}
+# Define age groups
+df <- df %>% 
+  mutate(age_group = cut(age,
+                         breaks = c(30,39, 40, 59, 69, 79, 89),labels = c("30-39", "40-49", "50-59", "60-69", "70-79", "80-89" ),include.lowest = TRUE,right= TRUE))
+```
+
+```{r}
+table(df$age_group, useNA = "ifany")
+```
+
+
+Since there are no patients younger than 30, the age groups where defined from 30 years onwards in ten year intervarls. This choice balances granularity with interpretability and aligns with age banding in epidemiological analyses.
+
+### 5.2. Factor ordering 
+
+```{r}
+df <- df %>% mutate(
+  cancer_stage = factor(cancer_stage, levels = c("Localized", "Regional", "Metastatic")),
+  healthcare_access = factor(healthcare_access, ordered = FALSE),
+  country = factor(country)
+)
+```
+
+The categorical variables from above have been converted to factors and ordered when neccessary like cancer stages from Localized to Metastatic, in order to ensure consistent and clinically meaningful presentation in further plotting.
+
+## 6. Bivariate exploration 
+
+### 6.1. Stage by age group
+
+```{r}
+stage_age_table <- df %>% group_by(age_group, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
+
+print(stage_age_table)
+```
+JUSTIFICATION
+
+### 6.2. Stage by country
+
+```{r}
+stage_by_country_table <- df %>% group_by(country, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
+
+# Metastatic proportion by country
+metastatic_country <- stage_by_country_table %>% filter(cancer_stage == "Metastatic") %>% arrange(desc(percent))
+
+metastatic_country
+```
+When we examined the distribution of the stages by country, the proportion of metastatic diagnoses where close to 20% in most setting, with a moderst variation in between countries. This results could mean that the late stage diagnosis is not exclusive of only one region, but instead it represents a more global challenge.
+
+
+### 6.3. Survival by stage and healthcare access
+
+```{r}
+
+```
+
+### Conclusions
+
+
+# Explanatory Data Analysis
+
+## 1. Summary tables for visualization
+
+### Cancer stage distribution by age group
+
+### Cancer stage distribution by country
+
+### Survival summary by stage and healthcare access
+
+## 2. Visualizations
+
+### 2.1. Stage distribution by age group
+
+### 2.2. Geographic variation in metastatic diagnosis (as an idea)
+
+### 2.3. Survival by stage and healthcare access
+
+
+
