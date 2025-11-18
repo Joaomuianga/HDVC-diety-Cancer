@@ -15,27 +15,48 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 # load libraries 
-library(tidyverse)
-library(janitor)
-library(scales)
-library(ggthemes)
+#library(tidyverse)
+#library(janitor)
+#library(scales)
+#library(ggthemes)
+
+## we can use pacman, that allow other user to install and load libraries automaticaly
+library(pacman)
+pacman::p_load(rio,     # importing data
+               here,    # relative file pathwyas
+               janitor, # data cleaning and tables
+               skimr,   # data summary
+               scales,  # easily convert proportion to  percent
+               corrr,   # correlation analayis for numeric variables
+               rstatix, # statistics
+               ggExtra, 
+               gtsummary, # summary statistic and statistical tests
+               epikit,    # age_categories() funtion
+               flextable, # converting table to pretty images 
+               sf,        # working with map 
+               rnaturalearth,
+               tidyverse  # data management + ggplot2 graphics
+               )
 
 
 # Import dataset
 df_raw <- read.csv("colorectal_cancer_dataset.csv")
 
-# Clean column names
+# Clean column names 
 df <- df_raw %>% clean_names()
 ```
 
 We used `tidyverse` in order to obtain a a coherent grammar format for an easier data manipulation and plotting.
 
-`clean_names()` is used to standarize te column names and make them more readable like, for example Cancer_Stage -\> cancer_stage.
+`clean_names()` is used to standarize te column names and make them more readable like, for example **Cancer_Stage -\> cancer_stage.**
 
 We have kept df_raw (original dataset) and df (working version) separated for better practice.
 
 ```{r}
 summary(df)
+
+# overview of the dataset
+skimr::skim(df)
 ```
 
 `tidyverse` offers a consistent environment for manipulation and graphics.
@@ -117,13 +138,13 @@ Approximately 60% of the patients survived at least five years after the diagnos
 
 ```{r}
 # Define age groups
-df <- df %>% 
+df_new <- df %>% 
   mutate(age_group = cut(age,
                          breaks = c(30,39, 40, 59, 69, 79, 89),labels = c("30-39", "40-49", "50-59", "60-69", "70-79", "80-89" ),include.lowest = TRUE,right= TRUE))
 ```
 
 ```{r}
-table(df$age_group, useNA = "ifany")
+table(df_new$age_group, useNA = "ifany")
 ```
 
 
@@ -132,7 +153,7 @@ Since there are no patients younger than 30, the age groups where defined from 3
 ### 5.2. Factor ordering 
 
 ```{r}
-df <- df %>% mutate(
+df_new <- df_new %>% mutate(
   cancer_stage = factor(cancer_stage, levels = c("Localized", "Regional", "Metastatic")),
   healthcare_access = factor(healthcare_access, ordered = FALSE),
   country = factor(country)
@@ -146,7 +167,7 @@ The categorical variables from above have been converted to factors and ordered 
 ### 6.1. Stage by age group
 
 ```{r}
-stage_age_table <- df %>% group_by(age_group, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
+stage_age_table <- df_new %>% group_by(age_group, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
 
 print(stage_age_table)
 ```
@@ -155,7 +176,7 @@ JUSTIFICATION
 ### 6.2. Stage by country
 
 ```{r}
-stage_by_country_table <- df %>% group_by(country, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
+stage_by_country_table <- df_new %>% group_by(country, cancer_stage) %>% summarise(count = n()) %>% mutate(percent = count / sum(count) *100)
 
 # Metastatic proportion by country
 metastatic_country <- stage_by_country_table %>% filter(cancer_stage == "Metastatic") %>% arrange(desc(percent))
@@ -176,21 +197,280 @@ When we examined the distribution of the stages by country, the proportion of me
 
 # Explanatory Data Analysis
 
+
+
 ## 1. Summary tables for visualization
+```{r}
+## Summary table
+table_col <- df %>%
+  group_by(country, cancer_stage) %>%
+  summarise(
+    incidence_rate_per_100k  = mean(incidence_rate_per_100k, na.rm = TRUE),
+    mortality_rate_per_100k  = mean(mortality_rate_per_100k, na.rm = TRUE),
+    cases                    = n(),
+    .groups = "drop"
+  ) %>%
+  # keep one incidence/mortality per country-gender (overall)
+  group_by(country) %>%
+  mutate(
+    inc_overall = mean(incidence_rate_per_100k, na.rm = TRUE),
+    mort_overall = mean(mortality_rate_per_100k, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  select(Country = country,  cancer_stage, inc_overall, mort_overall, cases) %>%
+  distinct() %>%
+  # turn stages into columns of cases
+  pivot_wider(
+    names_from  = cancer_stage,
+    values_from = cases,
+    values_fill = 0
+  ) %>%
+  rename(
+    Incidence_per_100k = inc_overall,
+    Mortality_per_100k = mort_overall
+  ) 
 
-### Cancer stage distribution by age group
+# Flextable
+table_col %>%
+  flextable() %>%
+  autofit() %>%
+  theme_booktabs() %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "all") %>%
+  bg(i = seq(1, nrow(table_col), 2), bg = "#f6f6f6") %>%
+  color(color = "#132440") %>%
+  border_outer() %>%
+  border_inner()
 
-### Cancer stage distribution by country
 
-### Survival summary by stage and healthcare access
+```
+
+
+### 1.1.Summary table - Cancer stage distribution by age group and gender
+
+```{r}
+## T-tests
+# compare the mean age by stage
+df %>%
+  select(age, survival_5_years, country, cancer_stage) %>%
+  tbl_summary(
+    by = cancer_stage,
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})",
+      all_categorical() ~ "{n} ({p})"
+    ),  
+    missing = "no"
+    ) %>%
+  add_p() %>%
+  modify_header(label = "**Characteristic**") %>%
+  modify_caption("**Characteristics by Colorectal Cancer Stage**")
+
+
+```
+### 1.2. Pyramid of aggregate data by age group, gender and cancer stage
+```{r}
+# aggregate data by age group, gender and cancer stage
+df_pyr <- df_new %>%
+  group_by(cancer_stage, gender, age_group) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  # signed counts, one side for each gender
+  mutate(n_signed = ifelse(gender== "M", -n, n),
+         # make sure age_goupu is ordered corretly
+         age_group= factor(age_group, levels = sort(unique(age_group))))
+
+# plot pyramid - split by gender, and facet bu cancer stage
+ggplot(df_pyr, aes(x = age_group, y=n_signed,  fill = gender)) +
+  geom_col(width = 0.8) +
+  coord_flip() +
+  scale_y_continuous(labels = abs) +
+  facet_wrap( ~ cancer_stage, ncol = 2) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Cancer stage distribution by age group",
+    x = "Age group",
+    y = "Number of patients",
+    fill = "Gender"
+  )
+
+
+
+```
+
+
+### 2.3. Cancer stage distribution by country
+```{r}
+ggplot(df, aes(x = country, fill = cancer_stage)) +
+  geom_bar(width = 0.9) +
+    scale_fill_manual(values = c("Localized" = "#8ECFC9","Regional" = "#FFBE7A","Metastatic" = "#FA7F6F"))+
+  labs(
+    title = "Cancer stage distribution by country",
+    x = "Country",
+    y = "Number of patients",
+    fill = "Cancer Stage"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+```
+### 2.3.1 Cancer stage distribution faceted by country
+```{r}
+# facet by country   
+ggplot(df, aes(x = cancer_stage, fill = cancer_stage)) +
+  geom_bar() +
+  scale_fill_manual(values = c("Localized" = "#8ECFC9","Regional" = "#FFBE7A","Metastatic" = "#FA7F6F"))+
+  theme(axis.text.x = element_blank())+
+  facet_wrap(~ country) +
+  labs(
+    title = "Cancer stage distribution by country",
+    x = "Cancer stage",
+    y = "Number of patients",
+    fill = "Cancer Stage"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+
+# Survival summary by stage and healthcare access
 
 ## 2. Visualizations
 
 ### 2.1. Stage distribution by age group
+```{r}
+ggplot(data = df_new, mapping = aes(y = age, x = cancer_stage, fill = gender)) +
+  geom_boxplot(alpha = 0.7) +
+  theme(legend.position = "none") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Stage Distribution by Age",
+       x = "Stage",
+       y = "Age",
+       fill = "Gender")
+```
+
 
 ### 2.2. Geographic variation in metastatic diagnosis (as an idea)
 
+```{r}
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+
+metastatic <- df %>%
+  group_by(country) %>%
+  summarise(meta_cases = sum(cancer_stage == "Metastatic"), na.rm = T)
+
+map_df <- world %>%
+  left_join(metastatic, by = c("name" = "country"))
+
+ggplot(map_df) +
+  geom_sf(aes(fill = meta_cases)) +
+  scale_fill_gradient(low = "#8ECFC9", high = "#FA7F6F") +
+  labs(
+    title = "Geographic Variation in Metastatic Diagnosis",
+    fill = "% Metastatic"
+  ) +
+  theme_minimal()
+```
+
+
 ### 2.3. Survival by stage and healthcare access
+
+```{r}
+df_surv <- df %>%
+  mutate(
+    surv5 = ifelse(survival_5_years == "Yes", 1, 0),
+    cancer_stage = factor(cancer_stage,
+                          levels = c("Localized", "Regional", "Metastatic")),
+    healthcare_access = factor(healthcare_access,
+                               levels = c("Low", "Moderate", "High"))
+  )
+
+# descriptive table of survival by stage and healthcare access
+# this gives summary of stage, access, 5-year survivors, 5 year survival(%)
+tab_stage_access <- df_surv %>%
+  group_by(cancer_stage, healthcare_access) %>%
+  summarise(
+    n = n(),
+    survivors_5y = sum(surv5, na.rm = TRUE),
+    surv_5y_pct = round(100 * mean(surv5, na.rm = TRUE), 1),
+    .groups = "drop"
+  )
+
+tab_stage_access %>%
+  flextable() %>%
+  set_header_labels(
+    cancer_stage = "Stage",
+    healthcare_access = "Healthcare access",
+    n = "N",
+    survivors_5y = "5-year survivors",
+    surv_5y_pct = "5-year survival (%)"
+  ) %>%
+  autofit() %>%
+  theme_booktabs() %>%
+  bold(part = "header") %>%
+  align(align = "center", part = "all")
+
+```
+_ * The table shows 5-year survival in relation to cancer stage and healthcare access.
+* As expected, patients with metastatic disease showed substantially lower 5-year survival compared with localized and regional stages.
+* Across all stages, patients with low healthcare access had reduced 5-year survival compared to those with high access, even after adjusting for age and gender in a logistic regression model.
+* The interaction between stage and access suggested that the negative impact of poor access is particularly pronounced among patients with advanced (metastatic) disease._
+
+
+```{r}
+## 5 year survival by stage and healthcare access
+
+ggplot(tab_stage_access,
+       aes(x = healthcare_access,
+           y = surv_5y_pct,
+           fill = healthcare_access)) +
+  geom_col(width = 0.8) +
+  facet_wrap(~ cancer_stage) +
+  labs(
+    title = "5-year survival by stage and healthcare access",
+    x = "Healthcare access",
+    y = "5-year survival (%)",
+    fill = "Access"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Low" = "#FA7F6F",
+      "Moderate" = "#FFBE7A",
+      "High" = "#8ECFC9"
+    )
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+### Effect of stage & access on 5-year survival
+Main effect model
+```{r}
+model1 <- glm(
+  surv5 ~ cancer_stage + healthcare_access + age + gender,
+  data = df_surv,
+  family = binomial
+)
+
+summary(model1)
+
+```
+### Effect model with interaction stage X access
+```{r}
+model2 <- glm(
+  surv5 ~ cancer_stage + healthcare_access + age + gender,
+  data = df_surv,
+  family = binomial()
+)
+
+summary(model2)
+```
+
+### ORs for survivel by stage and access levels
+```{r}
+library(broom)
+broom::tidy(model2, exponentiate = TRUE, conf.int = TRUE)
+```
+
 
 
 
